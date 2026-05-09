@@ -19,6 +19,7 @@ from schemas.messages import ConversationCreate, MessageResponse, MessageReactio
 router = APIRouter(prefix="/api/v1", tags=["Chat"])
 ALLOWED_MESSAGE_REACTIONS = ["like", "love", "haha", "wow", "sad", "angry"]
 
+
 def format_duration(seconds: int):
     if not seconds:
         return "00:00"
@@ -27,6 +28,7 @@ def format_duration(seconds: int):
     remain_seconds = seconds % 60
 
     return f"{minutes:02d}:{remain_seconds:02d}"
+
 
 def create_call_message(db: Session, call: Call):
     call_label = "Cuộc gọi thoại" if call.call_type == "audio" else "Cuộc gọi video"
@@ -52,6 +54,7 @@ def create_call_message(db: Session, call: Call):
 
     return msg
 
+
 def are_friends(db: Session, user1_id: int, user2_id: int):
     return db.query(FriendRequest).filter(
         or_(
@@ -67,17 +70,19 @@ def are_friends(db: Session, user1_id: int, user2_id: int):
         FriendRequest.status == "accepted"
     ).first() is not None
 
+
 def is_member(db: Session, conversation_id: int, user_id: int):
     return db.query(ConversationMember).filter(
         ConversationMember.conversation_id == conversation_id,
         ConversationMember.user_id == user_id
     ).first() is not None
 
+
 def mark_conversation_read(
     db: Session,
     conversation_id: int,
     user_id: int,
-    message_id: int | None = None
+    message_id: int | None=None
 ):
     read = db.query(ConversationRead).filter(
         ConversationRead.conversation_id == conversation_id,
@@ -98,6 +103,19 @@ def mark_conversation_read(
 
     db.commit()
     return read
+
+
+# GROUP_CALLS = {}
+
+# GROUP_CALLS[call_id] = {
+#     "call_id": call_id,
+#     "conversation_id": conversation_id,
+#     "caller_id": user_id,
+#     "call_type": "video",
+#     "participants": set([user_id]),
+#     "created_at": datetime.utcnow()
+# }
+
 
 @router.websocket("/ws/{user_id}")
 async def websocket_chat(websocket: WebSocket, user_id: int):
@@ -364,8 +382,6 @@ async def websocket_chat(websocket: WebSocket, user_id: int):
                     "call_type": data.get("call_type", "video")
                 })
 
-
-
             elif msg_type == "call_accept":
 
                 receiver_id = data.get("receiver_id")
@@ -390,8 +406,6 @@ async def websocket_chat(websocket: WebSocket, user_id: int):
                     "user_id": user_id,
                     "conversation_id": data.get("conversation_id")
                 })
-
-
 
             elif msg_type == "call_reject":
 
@@ -438,7 +452,6 @@ async def websocket_chat(websocket: WebSocket, user_id: int):
                     "call_status": call_msg.call_status,
                     "created_at": str(call_msg.created_at)
                 })
-
 
             elif msg_type == "call_end":
 
@@ -507,7 +520,6 @@ async def websocket_chat(websocket: WebSocket, user_id: int):
                     "offer": data.get("offer")
                 })
 
-
             elif msg_type == "webrtc_answer":
                 receiver_id = data.get("receiver_id")
 
@@ -518,7 +530,6 @@ async def websocket_chat(websocket: WebSocket, user_id: int):
                     "answer": data.get("answer")
                 })
 
-
             elif msg_type == "ice_candidate":
                 receiver_id = data.get("receiver_id")
 
@@ -528,7 +539,6 @@ async def websocket_chat(websocket: WebSocket, user_id: int):
                     "conversation_id": data.get("conversation_id"),
                     "candidate": data.get("candidate")
                 })
-
 
             elif msg_type == "file":
 
@@ -700,7 +710,221 @@ async def websocket_chat(websocket: WebSocket, user_id: int):
                     "recalled_by": user_id,
                     "message": "Tin nhắn đã được thu hồi"
                 })
+            
+            # elif msg_type == "group_call_request":
+            #     conversation_id = data.get("conversation.id")
+                
+            #     conversation = db.query(Conversation).filter(
+            #         Conversation.id == conversation_id
+            #     ).first()
+                
+            #     if not conversation:
+            #         await websocket.send_json({
+            #             "type": "call_failed",
+            #             "message": "Cuộc trò chuyện không tồn tại"
+            #         })
+            #         db.close()
+            #         continue
+                
+            #     if conversation.is_group != 1:
+            #         await websocket.send_json({
+            #             "type": "call_request",
+            #             "message": "Chức năng này chỉ dành cho nhóm"
+            #         })
+            #         db.close()
+            #         continue
+                
+            #     members = db.query(Conversation).filter(
+            #         ConversationMember.conversation_id == conversation_id
+            #     ).first()
+                
+            #     member_ids = [m.user_id for m in members]
+                
+            #     if user_id not in member_ids:
+            #         await websocket.send_json({
+            #             "type": "call_request",
+            #             "message": "Bạn không thuộc nhóm này"
+            #         })
+            #         db.close()
+            #         continue
+                
+            #     online_members = [
+            #         uid for uid in member_ids
+            #         if uid != user_id and manager.is_online(uid)
+            #     ]
+                
+            #     if len(online_members) == 0:
+            #         await websocket.send_json({
+            #             "type": "call_failed",
+            #             "message": "Không có thành viên nào đang online"
+            #         })           
+            #         db.close()
+            #         continue
+                
+            #     call_id = str(uuid4())
+            #     GROUP_CALLS[call_id] = {
+            #         "call_id": call_id,
+            #         "conversation_id": conversation_id,
+            #         "caller_id": user_id,
+            #         "call_type": "video",
+            #         "participants": set([user_id]),
+            #         "created_at": datetime.utcnow()
+            #     }
+                
+            #     await websocket.send_json({
+            #         "type": "group_call_started",
+            #         "call_id": call_id,
+            #         "conversation_id": conversation_id,
+            #         "call_type": "video",
+            #         "participants": [user_id]
+            #     })
+                
+            #     await manager.send_to_many(online_members, {
+            #         "type": "group_incoming_call",
+            #         "call_id": call_id,
+            #         "caller_id": user_id,
+            #         "conversation_id": conversation_id,
+            #         "conversation_name": conversation.name or f"Nhóm #{conversation.id}",
+            #         "call_type": "video"
+            #     })
+            
+            # elif msg_type == "group_call_join":
+            #     call_id = data.get("call_id")
 
+            #     call = GROUP_CALLS.get(call_id)
+
+            #     if not call:
+            #         await websocket.send_json({
+            #             "type": "call_failed",
+            #             "message": "Cuộc gọi nhóm không còn tồn tại"
+            #         })
+            #         db.close()
+            #         continue
+
+            #     conversation_id = call["conversation_id"]
+
+            #     member = db.query(ConversationMember).filter(
+            #         ConversationMember.conversation_id == conversation_id,
+            #         ConversationMember.user_id == user_id
+            #     ).first()
+
+            #     if not member:
+            #         await websocket.send_json({
+            #             "type": "call_failed",
+            #             "message": "Bạn không thuộc nhóm này"
+            #         })
+            #         db.close()
+            #         continue
+
+            #     old_participants = list(call["participants"])
+
+            #     call["participants"].add(user_id)
+
+            #     await websocket.send_json({
+            #         "type": "group_call_joined",
+            #         "call_id": call_id,
+            #         "conversation_id": conversation_id,
+            #         "participants": old_participants,
+            #         "call_type": call["call_type"]
+            #     })
+
+            #     await manager.send_to_many(old_participants, {
+            #         "type": "group_user_joined",
+            #         "call_id": call_id,
+            #         "conversation_id": conversation_id,
+            #         "user_id": user_id
+            #     })
+            
+            # elif msg_type == "group_call_reject":
+            #     call_id = data.get("call_id")
+
+            #     call = GROUP_CALLS.get(call_id)
+
+            #     if call:
+            #         await manager.send_to_user(call["caller_id"], {
+            #             "type": "group_call_rejected",
+            #             "call_id": call_id,
+            #             "user_id": user_id,
+            #             "conversation_id": call["conversation_id"]
+            #         })
+                    
+            # elif msg_type == "group_call_leave":
+            #     call_id = data.get("call_id")
+
+            #     call = GROUP_CALLS.get(call_id)
+
+            #     if not call:
+            #         continue
+
+            #     if user_id in call["participants"]:
+            #         call["participants"].remove(user_id)
+
+            #     remaining = list(call["participants"])
+
+            #     await manager.send_to_many(remaining, {
+            #         "type": "group_user_left",
+            #         "call_id": call_id,
+            #         "user_id": user_id,
+            #         "conversation_id": call["conversation_id"]
+            #     })
+
+            #     if len(call["participants"]) == 0:
+            #         del GROUP_CALLS[call_id]
+            
+            # elif msg_type == "group_webrtc_offer":
+            #     call_id = data.get("call_id")
+            #     target_user_id = data.get("target_user_id")
+            #     offer = data.get("offer")
+
+            #     call = GROUP_CALLS.get(call_id)
+
+            #     if not call:
+            #         continue
+
+            #     await manager.send_to_user(target_user_id, {
+            #         "type": "group_webrtc_offer",
+            #         "call_id": call_id,
+            #         "sender_id": user_id,
+            #         "conversation_id": call["conversation_id"],
+            #         "offer": offer
+            #     })
+            
+            # elif msg_type == "group_webrtc_answer":
+            #     call_id = data.get("call_id")
+            #     target_user_id = data.get("target_user_id")
+            #     answer = data.get("answer")
+
+            #     call = GROUP_CALLS.get(call_id)
+
+            #     if not call:
+            #         continue
+
+            #     await manager.send_to_user(target_user_id, {
+            #         "type": "group_webrtc_answer",
+            #         "call_id": call_id,
+            #         "sender_id": user_id,
+            #         "conversation_id": call["conversation_id"],
+            #         "answer": answer
+            #     })
+            
+            # elif msg_type == "group_ice_candidate":
+            #     call_id = data.get("call_id")
+            #     target_user_id = data.get("target_user_id")
+            #     candidate = data.get("candidate")
+
+            #     call = GROUP_CALLS.get(call_id)
+
+            #     if not call:
+            #         continue
+
+            #     await manager.send_to_user(target_user_id, {
+            #         "type": "group_ice_candidate",
+            #         "call_id": call_id,
+            #         "sender_id": user_id,
+            #         "conversation_id": call["conversation_id"],
+            #         "candidate": candidate
+            #     })
+            
             db.close()
 
     except WebSocketDisconnect:
@@ -710,8 +934,8 @@ async def websocket_chat(websocket: WebSocket, user_id: int):
 @router.post("/conversations")
 def create_conversation(
     data: ConversationCreate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    db: Session=Depends(get_db),
+    current_user: User=Depends(get_current_user)
 ):
     member_ids = list(set(data.member_ids + [current_user.id]))
 
@@ -803,8 +1027,8 @@ def create_conversation(
 
 @router.get("/conversations")
 def get_my_conversations(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    db: Session=Depends(get_db),
+    current_user: User=Depends(get_current_user)
 ):
 
     my_conversation_ids = db.query(ConversationMember.conversation_id).filter(
@@ -836,7 +1060,7 @@ def get_my_conversations(
 
     conversations = db.query(Conversation).filter(
         Conversation.id.in_(ids),
-        Conversation.status.in_(['active','request']),
+        Conversation.status.in_(['active', 'request']),
         ~Conversation.id.in_(archived_ids)
     ).all()
 
@@ -947,13 +1171,13 @@ def get_my_conversations(
             }
         
         check_is_online = None
-        
+        check_last_time = None
         if c.is_group == 0:
-            other_user_id = None
 
             for uid in member_ids:
                 if uid != current_user.id:
                     check_is_online = manager.is_online(uid)
+                    check_last_time = manager.get_last_seen_info(uid)
                     break
         else:
             check_is_online = True
@@ -966,6 +1190,7 @@ def get_my_conversations(
             "is_group": c.is_group,
             "is_pinned": c.id in pinned_ids,
             "is_online": check_is_online,
+            "last_time": check_last_time,
             "unread_count": unread_count,
             "last_message": last_message_payload,
             "created_at": c.created_at,
@@ -989,11 +1214,12 @@ def get_my_conversations(
 
     return result
 
+
 @router.delete("/conversations/{conversation_id}/delete-for-me")
 def delete_conversation_for_me(
     conversation_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    db: Session=Depends(get_db),
+    current_user: User=Depends(get_current_user)
 ):
     member = db.query(ConversationMember).filter(
         ConversationMember.conversation_id == conversation_id,
@@ -1033,11 +1259,12 @@ def delete_conversation_for_me(
         "last_deleted_message_id": last_message_id
     }
 
+
 @router.get("/conversations/search")
 def search_conversations(
-    q: str = Query(..., min_length=1),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    q: str=Query(..., min_length=1),
+    db: Session=Depends(get_db),
+    current_user: User=Depends(get_current_user)
 ):
     keyword = f"%{q}%"
 
@@ -1096,13 +1323,14 @@ def search_conversations(
         "conversations": result
     }
 
+
 @router.get("/conversations/{conversation_id}/messages")
 def get_conversation_messages(
     conversation_id: int,
-    limit: int = Query(20, ge=1, le=100),
-    before_id: int | None = None,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    limit: int=Query(20, ge=1, le=100),
+    before_id: int | None=None,
+    db: Session=Depends(get_db),
+    current_user: User=Depends(get_current_user)
 ):
     member = db.query(ConversationMember).filter(
         ConversationMember.conversation_id == conversation_id,
@@ -1234,14 +1462,15 @@ def get_conversation_messages(
         "oldest_id": result[0]["id"] if result else None
     }
 
+
 @router.get("/conversations/{conversation_id}/search-messages")
 def search_messages_in_conversation(
     conversation_id: int,
-    q: str = Query(..., min_length=1),
-    limit: int = Query(20, ge=1, le=100),
-    offset: int = Query(0, ge=0),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    q: str=Query(..., min_length=1),
+    limit: int=Query(20, ge=1, le=100),
+    offset: int=Query(0, ge=0),
+    db: Session=Depends(get_db),
+    current_user: User=Depends(get_current_user)
 ):
     # Kiểm tra user có thuộc cuộc trò chuyện không
     member = db.query(ConversationMember).filter(
@@ -1289,11 +1518,12 @@ def search_messages_in_conversation(
         "messages": result
     }
 
+
 @router.patch("/conversations/{conversation_id}/read")
 async def mark_read(
     conversation_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    db: Session=Depends(get_db),
+    current_user: User=Depends(get_current_user)
 ):
     member = db.query(ConversationMember).filter(
         ConversationMember.conversation_id == conversation_id,
@@ -1336,11 +1566,12 @@ async def mark_read(
         "last_read_message_id": last_message_id
     }
 
+
 @router.get("/conversations/{conversation_id}/unread-count")
 def get_unread_count(
     conversation_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    db: Session=Depends(get_db),
+    current_user: User=Depends(get_current_user)
 ):
     member = db.query(ConversationMember).filter(
         ConversationMember.conversation_id == conversation_id,
@@ -1371,6 +1602,7 @@ def get_unread_count(
         "unread_count": count
     }
 
+
 @router.get("/users/{user_id}/online")
 def check_online(user_id: int):
     return {
@@ -1378,10 +1610,11 @@ def check_online(user_id: int):
         "online": manager.is_online(user_id)
     }
 
+
 @router.get("/message-requests")
 def get_message_requests(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    db: Session=Depends(get_db),
+    current_user: User=Depends(get_current_user)
 ):
     my_conversation_ids = db.query(ConversationMember.conversation_id).filter(
         ConversationMember.user_id == current_user.id
@@ -1396,11 +1629,12 @@ def get_message_requests(
 
     return requests
 
+
 @router.patch("/message-requests/{conversation_id}/accept")
 def accept_message_request(
     conversation_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    db: Session=Depends(get_db),
+    current_user: User=Depends(get_current_user)
 ):
     member = db.query(ConversationMember).filter(
         ConversationMember.conversation_id == conversation_id,
@@ -1423,11 +1657,12 @@ def accept_message_request(
 
     return {"message": "Đã chấp nhận tin nhắn chờ"}
 
+
 @router.patch("/message-requests/{conversation_id}/reject")
 def reject_message_request(
     conversation_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    db: Session=Depends(get_db),
+    current_user: User=Depends(get_current_user)
 ):
     member = db.query(ConversationMember).filter(
         ConversationMember.conversation_id == conversation_id,
@@ -1450,10 +1685,11 @@ def reject_message_request(
 
     return {"message": "Đã từ chối tin nhắn chờ"}
 
+
 @router.post("/upload")
 def upload_chat_file(
-    file: UploadFile = File(...),
-    current_user: User = Depends(get_current_user)
+    file: UploadFile=File(...),
+    current_user: User=Depends(get_current_user)
 ):
     allowed_types = [
         "image/jpeg",
@@ -1509,11 +1745,12 @@ def upload_chat_file(
         "file_name": file.filename
     }
 
+
 @router.patch("/messages/{message_id}/recall")
 async def recall_message(
     message_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    db: Session=Depends(get_db),
+    current_user: User=Depends(get_current_user)
 ):
     msg = db.query(Message).filter(Message.id == message_id).first()
 
@@ -1552,11 +1789,12 @@ async def recall_message(
 
     return {"message": "Đã thu hồi tin nhắn"}
 
+
 @router.delete("/messages/{message_id}/delete-for-me")
 def delete_message_for_me(
     message_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    db: Session=Depends(get_db),
+    current_user: User=Depends(get_current_user)
 ):
     msg = db.query(Message).filter(Message.id == message_id).first()
 
@@ -1580,12 +1818,13 @@ def delete_message_for_me(
 
     return {"message": "Đã xóa tin nhắn phía bạn"}
 
+
 @router.post("/messages/{message_id}/reactions", response_model=MessageReactionResponse)
 async def react_message(
     message_id: int,
     data: MessageReactionCreate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    db: Session=Depends(get_db),
+    current_user: User=Depends(get_current_user)
 ):
     if data.reaction_type not in ALLOWED_MESSAGE_REACTIONS:
         raise HTTPException(400, "Reaction không hợp lệ")
@@ -1643,11 +1882,12 @@ async def react_message(
 
     return reaction
 
+
 @router.delete("/messages/{message_id}/reactions")
 async def remove_message_reaction(
     message_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    db: Session=Depends(get_db),
+    current_user: User=Depends(get_current_user)
 ):
     msg = db.query(Message).filter(Message.id == message_id).first()
 
@@ -1688,11 +1928,12 @@ async def remove_message_reaction(
 
     return {"message": "Đã bỏ reaction"}
 
+
 @router.get("/messages/{message_id}/reactions")
 def get_message_reactions(
     message_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    db: Session=Depends(get_db),
+    current_user: User=Depends(get_current_user)
 ):
     msg = db.query(Message).filter(Message.id == message_id).first()
 
@@ -1736,12 +1977,13 @@ def get_message_reactions(
         "users": users
     }
 
+
 @router.patch("/messages/{message_id}/edit")
 async def edit_message(
     message_id: int,
     data: MessageEdit,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    db: Session=Depends(get_db),
+    current_user: User=Depends(get_current_user)
 ):
     msg = db.query(Message).filter(Message.id == message_id).first()
 
@@ -1805,11 +2047,12 @@ async def edit_message(
         }
     }
 
+
 @router.get("/conversations/{conversation_id}/media")
 def get_conversation_media(
     conversation_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    db: Session=Depends(get_db),
+    current_user: User=Depends(get_current_user)
 ):
     member = db.query(ConversationMember).filter(
         ConversationMember.conversation_id == conversation_id,
