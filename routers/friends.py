@@ -6,8 +6,78 @@ from database import get_db
 from models import User, FriendRequest
 from services.auth import get_current_user, is_blocked
 from services.notification import create_notification
+from fastapi.param_functions import Query
 
 router = APIRouter(prefix="/api/v1/friends", tags=["Friends"])
+
+def get_friend_request_between(db: Session, user_a_id: int, user_b_id: int):
+    return db.query(FriendRequest).filter(
+        or_(
+            and_(
+                FriendRequest.sender_id == user_a_id,
+                FriendRequest.receiver_id == user_b_id
+            ),
+            and_(
+                FriendRequest.sender_id == user_b_id,
+                FriendRequest.receiver_id == user_a_id
+            )
+        )
+    ).first()
+
+def get_friendship_status(db: Session, current_user_id: int, other_user_id: int):
+    if current_user_id == other_user_id:
+        return {
+            "status": "self",
+            "request_id": None
+        }
+
+    request = get_friend_request_between(
+        db=db,
+        user_a_id=current_user_id,
+        user_b_id=other_user_id
+    )
+
+    if not request:
+        return {
+            "status": "not_friend",
+            "request_id": None
+        }
+
+    if request.status == "accepted":
+        return {
+            "status": "friends",
+            "request_id": request.id
+        }
+
+    if request.status == "pending":
+        if request.sender_id == current_user_id:
+            return {
+                "status": "request_sent",
+                "request_id": request.id
+            }
+
+        return {
+            "status": "request_received",
+            "request_id": request.id
+        }
+
+    if request.status == "rejected":
+        return {
+            "status": "rejected",
+            "request_id": request.id
+        }
+
+    if request.status == "cancelled":
+        return {
+            "status": "not_friend",
+            "request_id": request.id
+        }
+
+    return {
+        "status": "not_friend",
+        "request_id": None
+    }
+
 
 @router.post("/request/{user_id}")
 async def send_friend_request(
@@ -131,21 +201,40 @@ def get_requests(
 
 @router.get("/list")
 def get_friends(
+    q: str = Query("", description="Tìm kiếm theo tên"),
+    limit: int = Query(30, ge=1, le=100),    
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    friends = db.query(FriendRequest).filter(
-        or_(
-            FriendRequest.sender_id == current_user.id,
-            FriendRequest.receiver_id == current_user.id
-        ),
-        FriendRequest.status == "accepted"
-    ).all()
+    query = db.query(User).filter(User.id != current_user.id)
+    
+    if q.strip():
+        keyword = f"%{q.strip()}%"
+        query = query.filter(
+            or_(
+                User.full_name.ilike(keyword),
+                User.email.ilike(keyword)
+            )
+        )
+    
+    users = query.order_by(User.id.desc()).limit(limit).all()
 
     result = []
 
-    for fr in friends:
-        friend_id = fr.receiver_id if fr.sender_id == current_user.id else fr.sender_id
-        result.append(friend_id)
+    for user in users:
+        friendship = get_friendship_status(
+            db=db,
+            current_user_id=current_user.id,
+            other_user_id=user.id
+        )
 
+        result.append({
+            "id": user.id,
+            "full_name": user.full_name,
+            "email": user.email,
+            "avatar": user.avatar,
+            "bio": getattr(user, "bio", None),
+            "friendship_status": friendship["status"],
+            "friend_request_id": friendship["request_id"]
+        })
     return result
