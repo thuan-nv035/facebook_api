@@ -934,16 +934,15 @@ async def websocket_chat(websocket: WebSocket, user_id: int):
 @router.post("/conversations")
 def create_conversation(
     data: ConversationCreate,
-    db: Session=Depends(get_db),
-    current_user: User=Depends(get_current_user)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     member_ids = list(set(data.member_ids + [current_user.id]))
 
-    # Không cho tạo chat cá nhân với nhiều hơn 1 người
     if not data.is_group and len(member_ids) != 2:
         raise HTTPException(400, "Chat cá nhân chỉ gồm 2 người")
 
-    # Nếu là chat cá nhân 1-1 thì kiểm tra đã tồn tại chưa
+    # Check chat 1-1 đã tồn tại chưa
     if not data.is_group and len(member_ids) == 2:
         other_id = [uid for uid in member_ids if uid != current_user.id][0]
 
@@ -968,33 +967,43 @@ def create_conversation(
         ).first()
 
         if existing_conversation:
-            # Nếu user hiện tại từng xóa cuộc trò chuyện này,
-            # khi tạo lại thì khôi phục cho riêng user đó
-            deleted = db.query(DeletedConversation).filter(
-                DeletedConversation.user_id == current_user.id,
-                DeletedConversation.conversation_id == existing_conversation.id
-            ).first()
+            # Nếu sau này đã là bạn thì đưa conversation về active
+            if are_friends(db, current_user.id, other_id):
+                existing_conversation.status = "active"
 
-            if deleted:
-                db.delete(deleted)
+                deleted = db.query(DeletedConversation).filter(
+                    DeletedConversation.user_id == current_user.id,
+                    DeletedConversation.conversation_id == existing_conversation.id
+                ).first()
 
-            # Nếu conversation từng bị archive thì cũng bỏ archive
-            archived = db.query(ArchivedConversation).filter(
-                ArchivedConversation.user_id == current_user.id,
-                ArchivedConversation.conversation_id == existing_conversation.id
-            ).first()
+                if deleted:
+                    db.delete(deleted)
 
-            if archived:
-                db.delete(archived)
+                archived = db.query(ArchivedConversation).filter(
+                    ArchivedConversation.user_id == current_user.id,
+                    ArchivedConversation.conversation_id == existing_conversation.id
+                ).first()
 
-            db.commit()
+                if archived:
+                    db.delete(archived)
+
+                db.commit()
 
             return {
-                "message": "Cuộc trò chuyện đã tồn tại, đã khôi phục lại",
+                "message": "Cuộc trò chuyện đã tồn tại",
                 "conversation_id": existing_conversation.id,
-                "member_ids": member_ids
+                "member_ids": member_ids,
+                "status": existing_conversation.status
             }
+
+    # Tạo mới
     status = "active"
+
+    if not data.is_group and len(member_ids) == 2:
+        other_id = [uid for uid in member_ids if uid != current_user.id][0]
+
+        if not are_friends(db, current_user.id, other_id):
+            status = "request"
 
     conversation = Conversation(
         name=data.name if data.is_group else None,
@@ -1019,9 +1028,14 @@ def create_conversation(
     db.commit()
 
     return {
-        "message": "Tạo cuộc trò chuyện thành công",
+        "message": (
+            "Tạo cuộc trò chuyện thành công"
+            if status == "active"
+            else "Đã gửi vào tin nhắn chờ"
+        ),
         "conversation_id": conversation.id,
-        "member_ids": member_ids
+        "member_ids": member_ids,
+        "status": status
     }
 
 
@@ -1613,8 +1627,8 @@ def check_online(user_id: int):
 
 @router.get("/message-requests")
 def get_message_requests(
-    db: Session=Depends(get_db),
-    current_user: User=Depends(get_current_user)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     my_conversation_ids = db.query(ConversationMember.conversation_id).filter(
         ConversationMember.user_id == current_user.id
@@ -1622,20 +1636,78 @@ def get_message_requests(
 
     ids = [item[0] for item in my_conversation_ids]
 
-    requests = db.query(Conversation).filter(
+    conversations = db.query(Conversation).filter(
         Conversation.id.in_(ids),
-        Conversation.status == "request"
+        Conversation.status == "request",
+        Conversation.creator_id != current_user.id
     ).order_by(Conversation.created_at.desc()).all()
 
-    return requests
+    result = []
+
+    for c in conversations:
+        members = db.query(ConversationMember).filter(
+            ConversationMember.conversation_id == c.id
+        ).all()
+
+        member_ids = [m.user_id for m in members]
+
+        users = db.query(User).filter(
+            User.id.in_(member_ids)
+        ).all()
+
+        other_user = None
+
+        for u in users:
+            if u.id != current_user.id:
+                other_user = u
+                break
+
+        last_message = db.query(Message).filter(
+            Message.conversation_id == c.id
+        ).order_by(Message.id.desc()).first()
+
+        result.append({
+            "id": c.id,
+            "name": c.name,
+            "display_name": other_user.full_name if other_user else f"Cuộc trò chuyện #{c.id}",
+            "display_avatar": other_user.avatar if other_user else None,
+            "is_group": c.is_group,
+            "status": c.status,
+            "created_at": c.created_at,
+            "last_message": {
+                "id": last_message.id,
+                "sender_id": last_message.sender_id,
+                "content": last_message.content,
+                "created_at": last_message.created_at
+            } if last_message else None,
+            "members": [
+                {
+                    "id": u.id,
+                    "full_name": u.full_name,
+                    "email": u.email,
+                    "avatar": u.avatar
+                }
+                for u in users
+            ]
+        })
+
+    return result
 
 
 @router.patch("/message-requests/{conversation_id}/accept")
 def accept_message_request(
     conversation_id: int,
-    db: Session=Depends(get_db),
-    current_user: User=Depends(get_current_user)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
+    conversation = db.query(Conversation).filter(
+        Conversation.id == conversation_id,
+        Conversation.status == "request"
+    ).first()
+
+    if not conversation:
+        raise HTTPException(404, "Tin nhắn chờ không tồn tại")
+
     member = db.query(ConversationMember).filter(
         ConversationMember.conversation_id == conversation_id,
         ConversationMember.user_id == current_user.id
@@ -1644,26 +1716,33 @@ def accept_message_request(
     if not member:
         raise HTTPException(403, "Bạn không thuộc cuộc trò chuyện này")
 
-    conversation = db.query(Conversation).filter(
-        Conversation.id == conversation_id,
-        Conversation.status == "request"
-    ).first()
-
-    if not conversation:
-        raise HTTPException(404, "Không tìm thấy tin nhắn chờ")
+    if conversation.creator_id == current_user.id:
+        raise HTTPException(400, "Bạn không thể tự duyệt tin nhắn chờ của mình")
 
     conversation.status = "active"
     db.commit()
 
-    return {"message": "Đã chấp nhận tin nhắn chờ"}
+    return {
+        "message": "Đã chấp nhận tin nhắn chờ",
+        "conversation_id": conversation.id,
+        "status": "active"
+    }
 
 
 @router.patch("/message-requests/{conversation_id}/reject")
 def reject_message_request(
     conversation_id: int,
-    db: Session=Depends(get_db),
-    current_user: User=Depends(get_current_user)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
+    conversation = db.query(Conversation).filter(
+        Conversation.id == conversation_id,
+        Conversation.status == "request"
+    ).first()
+
+    if not conversation:
+        raise HTTPException(404, "Tin nhắn chờ không tồn tại")
+
     member = db.query(ConversationMember).filter(
         ConversationMember.conversation_id == conversation_id,
         ConversationMember.user_id == current_user.id
@@ -1672,18 +1751,17 @@ def reject_message_request(
     if not member:
         raise HTTPException(403, "Bạn không thuộc cuộc trò chuyện này")
 
-    conversation = db.query(Conversation).filter(
-        Conversation.id == conversation_id,
-        Conversation.status == "request"
-    ).first()
-
-    if not conversation:
-        raise HTTPException(404, "Không tìm thấy tin nhắn chờ")
+    if conversation.creator_id == current_user.id:
+        raise HTTPException(400, "Bạn không thể tự từ chối tin nhắn chờ của mình")
 
     conversation.status = "rejected"
     db.commit()
 
-    return {"message": "Đã từ chối tin nhắn chờ"}
+    return {
+        "message": "Đã từ chối tin nhắn chờ",
+        "conversation_id": conversation.id,
+        "status": "rejected"
+    }
 
 
 @router.post("/upload")

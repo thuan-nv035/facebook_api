@@ -9,7 +9,13 @@ from services.notification import create_notification
 from fastapi.param_functions import Query
 
 router = APIRouter(prefix="/api/v1/friends", tags=["Friends"])
+async def send_friend_ws(user_id: int, payload: dict):
+    try:
+        from routers.chat import manager
 
+        await manager.send_to_user(user_id, payload)
+    except Exception as e:
+        print("Friend WebSocket error:", e)
 def get_friend_request_between(db: Session, user_a_id: int, user_b_id: int):
     return db.query(FriendRequest).filter(
         or_(
@@ -92,28 +98,50 @@ async def send_friend_request(
         raise HTTPException(400, "Không thể kết bạn với chính mình")
 
     user = db.query(User).filter(User.id == user_id).first()
+
     if not user:
         raise HTTPException(404, "User không tồn tại")
 
     existing = db.query(FriendRequest).filter(
         or_(
-            and_(FriendRequest.sender_id == current_user.id, FriendRequest.receiver_id == user_id),
-            and_(FriendRequest.sender_id == user_id, FriendRequest.receiver_id == current_user.id)
+            and_(
+                FriendRequest.sender_id == current_user.id,
+                FriendRequest.receiver_id == user_id
+            ),
+            and_(
+                FriendRequest.sender_id == user_id,
+                FriendRequest.receiver_id == current_user.id
+            )
         )
     ).first()
 
     if existing:
-        raise HTTPException(400, "Đã gửi hoặc đã là bạn")
+        if existing.status == "accepted":
+            raise HTTPException(400, "Hai người đã là bạn bè")
 
-    fr = FriendRequest(
-        sender_id=current_user.id,
-        receiver_id=user_id
-    )
+        if existing.status == "pending":
+            raise HTTPException(400, "Đã gửi lời mời hoặc đang chờ xử lý")
 
-    db.add(fr)
-    db.commit()
+        # Cho gửi lại nếu trước đó bị từ chối hoặc đã hủy
+        existing.sender_id = current_user.id
+        existing.receiver_id = user_id
+        existing.status = "pending"
 
-    # 🔥 notification
+        db.commit()
+        db.refresh(existing)
+
+        fr = existing
+    else:
+        fr = FriendRequest(
+            sender_id=current_user.id,
+            receiver_id=user_id,
+            status="pending"
+        )
+
+        db.add(fr)
+        db.commit()
+        db.refresh(fr)
+
     await create_notification(
         db=db,
         user_id=user_id,
@@ -122,7 +150,23 @@ async def send_friend_request(
         message=f"{current_user.full_name} đã gửi lời mời kết bạn"
     )
 
-    return {"message": "Đã gửi lời mời"}
+    await send_friend_ws(user_id, {
+        "type": "friend_request_received",
+        "request_id": fr.id,
+        "friendship_status": "request_received",
+        "user": {
+            "id": current_user.id,
+            "full_name": current_user.full_name,
+            "email": current_user.email,
+            "avatar": current_user.avatar
+        }
+    })
+
+    return {
+        "message": "Đã gửi lời mời",
+        "request_id": fr.id,
+        "friendship_status": "request_sent"
+    }
 
 @router.post("/accept/{request_id}")
 async def accept_request(
@@ -138,8 +182,17 @@ async def accept_request(
     if not fr:
         raise HTTPException(404, "Không tìm thấy lời mời")
 
+    if fr.status != "pending":
+        raise HTTPException(400, "Lời mời này không còn ở trạng thái chờ")
+
+    sender = db.query(User).filter(User.id == fr.sender_id).first()
+
+    if not sender:
+        raise HTTPException(404, "Người gửi lời mời không tồn tại")
+
     fr.status = "accepted"
     db.commit()
+    db.refresh(fr)
 
     await create_notification(
         db=db,
@@ -149,10 +202,40 @@ async def accept_request(
         message=f"{current_user.full_name} đã chấp nhận lời mời kết bạn"
     )
 
-    return {"message": "Đã chấp nhận"}
+    # Báo realtime cho User A - người đã gửi lời mời
+    await send_friend_ws(fr.sender_id, {
+        "type": "friend_request_accepted",
+        "request_id": fr.id,
+        "friendship_status": "friends",
+        "user": {
+            "id": current_user.id,
+            "full_name": current_user.full_name,
+            "email": current_user.email,
+            "avatar": current_user.avatar
+        }
+    })
+
+    # Báo realtime cho User B - người vừa accept, để UI của B cũng đồng bộ nếu cần
+    await send_friend_ws(current_user.id, {
+        "type": "friend_status_changed",
+        "request_id": fr.id,
+        "friendship_status": "friends",
+        "user": {
+            "id": sender.id,
+            "full_name": sender.full_name,
+            "email": sender.email,
+            "avatar": sender.avatar
+        }
+    })
+
+    return {
+        "message": "Đã chấp nhận",
+        "request_id": fr.id,
+        "friendship_status": "friends"
+    }
 
 @router.post("/reject/{request_id}")
-def reject_request(
+async def reject_request(
     request_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -165,13 +248,33 @@ def reject_request(
     if not fr:
         raise HTTPException(404, "Không tìm thấy")
 
+    if fr.status != "pending":
+        raise HTTPException(400, "Lời mời này không còn ở trạng thái chờ")
+
     fr.status = "rejected"
     db.commit()
+    db.refresh(fr)
 
-    return {"message": "Đã từ chối"}
+    await send_friend_ws(fr.sender_id, {
+        "type": "friend_request_rejected",
+        "request_id": fr.id,
+        "friendship_status": "rejected",
+        "user": {
+            "id": current_user.id,
+            "full_name": current_user.full_name,
+            "email": current_user.email,
+            "avatar": current_user.avatar
+        }
+    })
+
+    return {
+        "message": "Đã từ chối",
+        "request_id": fr.id,
+        "friendship_status": "rejected"
+    }
 
 @router.delete("/cancel/{request_id}")
-def cancel_request(
+async def cancel_request(
     request_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -184,10 +287,28 @@ def cancel_request(
     if not fr:
         raise HTTPException(404, "Không tìm thấy")
 
+    receiver_id = fr.receiver_id
+
     db.delete(fr)
     db.commit()
 
-    return {"message": "Đã hủy lời mời"}
+    await send_friend_ws(receiver_id, {
+        "type": "friend_request_cancelled",
+        "request_id": request_id,
+        "friendship_status": "not_friend",
+        "user": {
+            "id": current_user.id,
+            "full_name": current_user.full_name,
+            "email": current_user.email,
+            "avatar": current_user.avatar
+        }
+    })
+
+    return {
+        "message": "Đã hủy lời mời",
+        "request_id": request_id,
+        "friendship_status": "not_friend"
+    }
 
 @router.get("/requests")
 def get_requests(
